@@ -227,6 +227,65 @@ def defaultDNSQuery(subdomain: str, domain: str, recordType="A", path=""):
     return {"internalDNS": res, "externalDNS": resExternal}
 
 
+
+def _dkimRedisConnection_():
+    """Return a Redis client for the dedicated DKIM keystore, or None if
+    the dkimRedis configuration section is disabled."""
+    import redis as redislib
+    cfg = Config.get("dkimRedis") or {}
+    if not cfg.get("enabled", False):
+        return None
+    kwargs = dict(
+        host=cfg.get("host", "127.0.0.1"),
+        port=int(cfg.get("port", 6380)),
+        decode_responses=True,
+    )
+    if cfg.get("password"):
+        kwargs["password"] = cfg["password"]
+    return redislib.Redis(**kwargs)
+
+
+def _storeDkimKeyInRedis_(domain, selector, privateKeyFilepath):
+    """Push a DKIM private key into the dedicated DKIM keystore.
+
+    rspamd (grommunio-antispam) reads keys from these hashes when
+    dkim_signing is configured with use_redis (key_prefix/selector_prefix
+    as configured in grommunio-setup).
+
+    Returns (stored, error); error is None on success or when the keystore
+    is disabled, and an error string if the push failed.
+    """
+    try:
+        conn = _dkimRedisConnection_()
+        if conn is None:
+            return False, None
+        with open(privateKeyFilepath, encoding="ascii") as f:
+            pem = f.read().strip()
+        pipe = conn.pipeline()
+        pipe.hset("DKIM_PRIV_KEYS", "{}.{}".format(selector, domain), pem)
+        pipe.hset("DKIM_SELECTORS", domain, selector)
+        pipe.execute()
+        return True, None
+    except Exception as err:
+        return False, str(err)
+
+
+def syncDkimKeysToRedis():
+    """Re-push all locally stored DKIM keys into the DKIM keystore.
+
+    Called on API startup so signing survives the loss of Redis data
+    (the keystore is a cache; the files under the admin-api data
+    directory remain the source of truth).
+    """
+    import glob
+    import os
+    pushed = 0
+    for path in sorted(glob.glob("/var/lib/grommunio-admin-api/*.dkim.key")):
+        domain = os.path.basename(path)[:-len(".dkim.key")]
+        ok, _ = _storeDkimKeyInRedis_(domain, "dkim", path)
+        pushed += 1 if ok else 0
+    return pushed
+
 def generateDkimKeys(domain, type="rsa", mode="dns", selector="dkim"):
     import os
     import shutil
@@ -266,4 +325,5 @@ def generateDkimKeys(domain, type="rsa", mode="dns", selector="dkim"):
     shutil.chown(publicKeyFilepath, "grommunio", "grommunio")
     os.chmod(publicKeyFilepath, 0o440)
 
-    return pubKey, None
+    stored, redisError = _storeDkimKeyInRedis_(domain, selector, privateKeyFilepath)
+    return {"pubKey": pubKey, "redisStored": stored, "redisError": redisError}, None
