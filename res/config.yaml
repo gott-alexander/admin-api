@@ -525,6 +525,10 @@ properties:
         type: integer
         description: Redis server port
         default: 6380
+      username:
+        type: string
+        description: Redis ACL user name (empty = default user)
+        default: ""
       password:
         type: string
         description: Redis server password (if required)

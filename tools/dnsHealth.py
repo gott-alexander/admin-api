@@ -240,6 +240,8 @@ def _dkimRedisConnection_():
         port=int(cfg.get("port", 6380)),
         decode_responses=True,
     )
+    if cfg.get("username"):
+        kwargs["username"] = cfg["username"]
     if cfg.get("password"):
         kwargs["password"] = cfg["password"]
     return redislib.Redis(**kwargs)
