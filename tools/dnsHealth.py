@@ -6,6 +6,7 @@ from dns import resolver, reversename
 import socket
 import subprocess
 from .config import Config
+from services import Service
 
 
 class ExternalResolver:
@@ -228,48 +229,30 @@ def defaultDNSQuery(subdomain: str, domain: str, recordType="A", path=""):
 
 
 
-def _dkimRedisConnection_():
-    """Return a Redis client for the dedicated DKIM keystore, or None if
-    the dkimRedis configuration section is disabled."""
-    import redis as redislib
-    cfg = Config.get("dkimRedis") or {}
-    if not cfg.get("enabled", False):
-        return None
-    kwargs = dict(
-        host=cfg.get("host", "127.0.0.1"),
-        port=int(cfg.get("port", 6380)),
-        decode_responses=True,
-    )
-    if cfg.get("username"):
-        kwargs["username"] = cfg["username"]
-    if cfg.get("password"):
-        kwargs["password"] = cfg["password"]
-    return redislib.Redis(**kwargs)
-
-
 def _storeDkimKeyInRedis_(domain, selector, privateKeyFilepath):
-    """Push a DKIM private key into the dedicated DKIM keystore.
+    """Push a DKIM private key into the Redis keystore.
 
     rspamd (grommunio-antispam) reads keys from these hashes when
     dkim_signing is configured with use_redis (key_prefix/selector_prefix
     as configured in grommunio-setup).
 
     Returns (stored, error); error is None on success or when the keystore
-    is disabled, and an error string if the push failed.
+    is disabled or unavailable, and an error string if the push failed.
     """
+    if not Config.get("dkimRedis", {}).get("enabled", False):
+        return False, None
     try:
-        conn = _dkimRedisConnection_()
-        if conn is None:
-            return False, None
-        with open(privateKeyFilepath, encoding="ascii") as f:
-            pem = f.read().strip()
-        pipe = conn.pipeline()
-        pipe.hset("DKIM_PRIV_KEYS", "{}.{}".format(selector, domain), pem)
-        pipe.hset("DKIM_SELECTORS", domain, selector)
-        pipe.execute()
-        return True, None
+        with Service("redis", errors=Service.SUPPRESS_INOP) as redis:
+            with open(privateKeyFilepath, encoding="ascii") as f:
+                pem = f.read().strip()
+            pipe = redis.pipeline()
+            pipe.hset("DKIM_PRIV_KEYS", "{}.{}".format(selector, domain), pem)
+            pipe.hset("DKIM_SELECTORS", domain, selector)
+            pipe.execute()
+            return True, None
     except Exception as err:
         return False, str(err)
+    return False, None
 
 
 def syncDkimKeysToRedis():
