@@ -242,7 +242,7 @@ def _storeDkimKeyInRedis_(domain, selector, privateKeyFilepath):
     if not Config.get("dkimRedis", {}).get("enabled", False):
         return False, None
     try:
-        with Service("redis", errors=Service.SUPPRESS_INOP) as redis:
+        with Service("dkimredis", errors=Service.SUPPRESS_INOP) as redis:
             with open(privateKeyFilepath, encoding="ascii") as f:
                 pem = f.read().strip()
             pipe = redis.pipeline()
