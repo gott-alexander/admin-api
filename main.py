@@ -37,10 +37,20 @@ else:
         import logging
         try:
             from tools.dnsHealth import syncDkimKeysToRedis
-            stored = syncDkimKeysToRedis()
-            logging.getLogger("dnsHealth").info("Re-pushed {} DKIM key(s) into the DKIM keystore".format(stored))
+            pushed, failed = syncDkimKeysToRedis()
+            logging.getLogger("dnsHealth").info("Pushed {} DKIM key(s) into the keystore ({} failed)".format(pushed, failed))
         except Exception as err:
             logging.getLogger("dnsHealth").error("Failed to sync DKIM keys to the keystore: {}".format(err))
+    import logging
+    try:
+        from tools.dnsHealth import importLegacyDkimFiles
+        error = importLegacyDkimFiles()
+        if error is None:
+            logging.getLogger("dnsHealth").info("DKIM legacy key file import checked")
+        else:
+            logging.getLogger("dnsHealth").error("DKIM legacy key file import failed: {}".format(error))
+    except Exception as err:
+        logging.getLogger("dnsHealth").error("DKIM legacy key file import failed: {}".format(err))
     if not config.Config["tasq"].get("disabled", False):
         import uwsgi
         import uwsgidecorators

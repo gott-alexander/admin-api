@@ -2189,12 +2189,17 @@ paths:
                   pubKey:
                     type: string
                     description: Public key (DNS TXT record content)
+                  dbStored:
+                    type: boolean
+                    description: >
+                      Whether the private key was stored in the database
+                      (table dkim_keys, the source of truth).
                   redisStored:
                     type: boolean
                     description: >
-                      Whether the private key was pushed into the DKIM Redis
-                      keystore (dkimRedis configuration). If false, the key
-                      must be installed into grommunio-antispam manually.
+                      Whether the private key was pushed into the local DKIM
+                      Redis keystore (dkimRedis configuration). If false, the
+                      push is retried by grommunio-admin-dkim-sync.timer.
                   redisError:
                     type: string
                     nullable: true

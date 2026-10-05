@@ -506,16 +506,17 @@ properties:
   dkimRedis:
     type: object
     description: |
-      Dedicated Redis keystore for DKIM private keys. When enabled,
-      generated DKIM keys are pushed to this Redis instance (hashes
-      DKIM_PRIV_KEYS / DKIM_SELECTORS), from where grommunio-antispam
-      picks them up for signing (configure its dkim_signing module with
-      use_redis=true). The key files under the admin-api data directory
-      remain the source of truth and are re-pushed on API startup.
+      Local Redis keystore for DKIM private keys. When enabled, keys are
+      replicated from the database (table dkim_keys, the source of truth)
+      into this Redis instance (hashes DKIM_PRIV_KEYS / DKIM_SELECTORS),
+      from where grommunio-antispam picks them up for signing (configure
+      its dkim_signing module with use_redis=true). Replication runs on
+      API startup, via `grommunio-admin dkim sync` and is retried by
+      grommunio-admin-dkim-sync.timer every minute until it succeeds.
     properties:
       enabled:
         type: boolean
-        description: Push generated DKIM keys into the Redis keystore
+        description: Replicate DKIM keys from the database into the Redis keystore
         default: false
       host:
         type: string
