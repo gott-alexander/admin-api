@@ -102,6 +102,14 @@ properties:
         type: string
         description: Port or service name of the exmdb service provider
         default: '5000'
+      midbHost:
+        type: string
+        description: Name or IP address of the local midb service, asked to release mailboxes before they are deleted
+        default: '::1'
+      midbPort:
+        type: integer
+        description: Port of the local midb service
+        default: 5555
       domainStorageLevels:
         type: integer
         description: Number of sub-directory levels to use for domain storage
@@ -216,6 +224,34 @@ properties:
       connection:
         type: object
         additionalProperties: true
+  oidc:
+    type: object
+    description: Single sign-on via an OpenID Connect provider
+    properties:
+      enabled:
+        type: boolean
+        description: Offer single sign-on login
+        default: false
+      issuer:
+        type: string
+        description: Issuer URL of the provider. The discovery document is fetched from `<issuer>/.well-known/openid-configuration`
+      clientId:
+        type: string
+        description: Client ID registered with the provider
+      clientSecret:
+        type: string
+        description: Client secret
+      scope:
+        type: string
+        description: Scopes to request
+        default: openid email profile
+      usernameClaim:
+        type: string
+        description: ID token claim containing the grommunio username or alias
+        default: preferred_username
+      redirectUri:
+        type: string
+        description: Callback URL registered with the provider. Defaults to `https://<host>/api/v1/login/oidc/callback`
   logging:
     type: object
     description: Configuration for logging output
@@ -546,4 +582,9 @@ properties:
         type: integer
         description: Number of workers
         default: 1
+        minimum: 1
+      pollInterval:
+        type: number
+        description: Seconds between checks for tasks queued by other processes or due for retry
+        default: 60
         minimum: 1
