@@ -14,7 +14,7 @@ from sqlalchemy import Column, ForeignKey, event, func, inspect, select
 from sqlalchemy.dialects.mysql import ENUM, INTEGER, TEXT, TIMESTAMP, TINYINT, VARBINARY, VARCHAR
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import column_property, relationship, selectinload, validates
+from sqlalchemy.orm import column_property, object_session, relationship, selectinload, validates
 
 try:
     # python 3.13
@@ -69,6 +69,15 @@ class Users(DataModel, DB.Base, NotifyTable):
         def __repr__(self):
             return repr(self.__dict)
 
+        def _add(self, prop):
+            # Adding the property cascades its user into the session, so only add it when the user already is
+            # there. A user still under construction would otherwise be autoflushed incomplete (no domain_id).
+            # Users.create adds the user later, which then cascades to its properties.
+            session = object_session(self.__user)
+            if session is not None:
+                session.add(prop)
+            return prop
+
         def __setitem__(self, k, v):
             tag = PropTags.deriveTag(k)
             name = self._name(k)
@@ -77,14 +86,14 @@ class Users(DataModel, DB.Base, NotifyTable):
                     return  # Value is to long to be stored, omit to avoid corrupting store properties
                 if tag in self.__struct:
                     if v is None:
-                        DB.session.delete(self.__struct[tag])
-                    else:
-                        self.__struct[tag].val = v
+                        self.__user._properties.remove(self.__struct.pop(tag))
+                        self.__dict.pop(name, None)
+                        return
+                    self.__struct[tag].val = v
                 elif v is None:
                     return
                 else:
-                    self.__struct[tag] = UserProperties(tag, v, self.__user)
-                    DB.session.add(self.__struct[tag])
+                    self.__struct[tag] = self._add(UserProperties(tag, v, self.__user))
                 self.__dict[name] = self.__struct[tag].val
                 return
             if v is None:
@@ -100,10 +109,9 @@ class Users(DataModel, DB.Base, NotifyTable):
                     values.pop(i)
                     next.append(current.pop(i))
                 else:
-                    next.append(UserProperties(tag, value, self.__user))
-                    DB.session.add(next[-1])
+                    next.append(self._add(UserProperties(tag, value, self.__user)))
             for rm in current:
-                DB.session.delete(rm)
+                self.__user._properties.remove(rm)
             order = 1
             for up in next:
                 up.orderID = order
@@ -197,6 +205,7 @@ class Users(DataModel, DB.Base, NotifyTable):
                       Int("orgID"),
                       RefProp("homeserver", "homeserverID", flags="patch", filter="set", qopt=selectinload)),
                      ({"attr": "password", "flags": "init, hidden"},
+                      Int("homeserverID", flags="hidden"),
                       Text("maildir", match=False, flags="hidden"),))
 
     USER_PRIVILEGE_POP3_IMAP = 1 << 0
@@ -244,6 +253,8 @@ class Users(DataModel, DB.Base, NotifyTable):
         from tools.license import getLicense
         if "username" not in data:
             return "Missing username"
+        # Chat login method stored with the user defaults, not a user attribute (read by GrochatService.createUser)
+        data.pop("keycloak", None)
         if maildir and data.get("status", Users.NORMAL) == Users.NORMAL and Users.count() >= getLicense().users:
             return "License user limit exceeded"
         if "domainID" in data:
@@ -314,9 +325,10 @@ class Users(DataModel, DB.Base, NotifyTable):
                 raise ValueError("'{}' is not a valid e-mail address".format(self.username))
             
         # Deduplicate aliases
-        aliases = set([alias.lower() for alias in patches.get("aliases", self.aliases)])
+        if "aliases" in patches:
+            aliases = set([alias.lower() for alias in patches.get("aliases")])
 
-        patches["aliases"] = aliases
+            patches["aliases"] = aliases
 
         DataModel.fromdict(self, patches, *args, **kwargs)
         displaytype = self.properties.get("displaytypeex", 0)
@@ -573,7 +585,15 @@ class Users(DataModel, DB.Base, NotifyTable):
         from tools.license import getLicense
         if self.status and not val and Users.count() >= getLicense().users:
             raise ValueError("License user limit exceeded")
+        restored = []
+        if self.status == self.DELETED and val != self.DELETED and self.ID is not None:
+            from tools.tasq import TasQServer
+            Users.query.filter(Users.ID == self.ID).with_for_update().first()  # Same lock order as deletion tasks
+            restored = TasQServer.cancelUserDeletion(self.ID, "User was restored")
         self.addressStatus = ((self.addressStatus or 0) & ~self.USER_MASK) | (val & self.USER_MASK)
+        if any(params.get("chatActive") for params in restored) and not self.addressStatus:
+            with Service("chat", errors=Service.SUPPRESS_ALL) as chat:
+                chat.activateUser(self, True)
 
     @status.expression
     def status(cls):

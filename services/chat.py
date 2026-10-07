@@ -11,6 +11,7 @@ from requests.exceptions import ConnectionError, HTTPError
 import hashlib
 import random
 import string
+import time
 
 import logging
 logger = logging.getLogger("chat")
@@ -67,6 +68,17 @@ class GrochatService:
             userdata["id"] = user.chatID
         return userdata
 
+    def ssoService(self):
+        """Name of the OAuth service grommunio-chat logs Keycloak users in with.
+
+        The grommunio build has a native keycloak provider, an upstream Mattermost only offers its GitLab one.
+        """
+        try:
+            config = self.driver.system.get_client_configuration(params={"format": "old"})
+        except Exception:
+            return "keycloak"
+        return "keycloak" if config.get("EnableSignUpWithKeycloak") == "true" else "gitlab"
+
     def createUser(self, user):
         """Create grochat user from grommunio user."""
         if user.chatID:
@@ -75,12 +87,13 @@ class GrochatService:
         from tools.misc import RecursiveDict
 
         data = RecursiveDict({"user": {}, "domain": {}})
+        data.update(DBConf.getFile("grommunio-admin", "defaults-system", True))
         data.update(DBConf.getFile("grommunio-admin", "defaults-domain-"+str(user.domainID), True))
         keycloak = data.get("user", {}).get("keycloak", False)
 
         userdata = self.userToData(user)
         if keycloak:
-            userdata["auth_service"] = "keycloak"
+            userdata["auth_service"] = self.ssoService()
             userdata["auth_data"] = str(user.ID)
         else:
             userdata["auth_service"] = "pam"
@@ -97,6 +110,30 @@ class GrochatService:
             return self.createUser(user) if create else None
         userdata = user if isdata else self.userToData(user)
         return self.driver.users.patch_user(userdata["id"], userdata)
+
+    def setUserAuth(self, user, service=None):
+        """Switch the login method of the chat account linked to a grommunio user.
+
+        Without service the account returns to the local (PAM) login.
+        Throttled requests (429) are retried after the announced delay.
+        """
+        if not user.chatID:
+            return None
+        auth = {"auth_service": service or "pam", "auth_data": str(user.ID) if service else user.username}
+        for attempt in range(5):
+            try:
+                return self.driver.users.update_user_authentication_method(user.chatID, auth)
+            except HTTPError as err:
+                if attempt == 4 or err.response is None or err.response.status_code != 429:
+                    raise
+                time.sleep(min(int(err.response.headers.get("Retry-After", 1)), 10))
+
+    def getUsers(self, userIDs):
+        """Fetch several chat accounts at once. Unknown IDs are left out."""
+        accounts = []
+        for start in range(0, len(userIDs), 100):
+            accounts += self.driver.users.get_users_by_ids(userIDs[start:start+100])
+        return accounts
 
     def setUserRoles(self, userID, roles):
         return self.driver.users.update_user_role(userID, {"roles": roles})
